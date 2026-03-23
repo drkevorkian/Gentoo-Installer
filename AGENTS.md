@@ -44,9 +44,15 @@ The script can be tested in a nested QEMU VM (TCG software emulation, no KVM req
 - TCG mode is ~50x slower than native. The disk/partition/RAID phases complete in minutes, but `emerge` (compilation) takes hours.
 - The CDLABEL in the `-append` parameter must match the ISO version (check with `7z l` or the GRUB config inside the ISO).
 
-### Known bugs found during VM testing
+### Script design notes (from maintainer)
 
-1. **`ensure_target_mounted` (line 570):** Creates `/mnt/gentoo/boot/efi` directory *before* mounting the root filesystem on `/mnt/gentoo`. After the mount, the directory is hidden by the fresh ext4 filesystem. Workaround: manually `mount /dev/md0 /mnt/gentoo && mkdir -p /mnt/gentoo/boot/efi && mount /dev/sda1 /mnt/gentoo/boot/efi` then re-run the script (it resumes from state).
+- **Known timing races:** Some steps execute before the previous command fully completes (e.g., EFI partition not found, mount point missing). This is a known issue the maintainer is actively fixing — not a one-off environment glitch. The script's state/resume mechanism (`run_step` + state file) is designed to recover from these by re-running.
+- **Intentional human checkpoint:** The `emerge` package list step (`install:packages_core`) deliberately requires a human to type **Yes** to confirm the package merge. This is the final interactive gate before long-running compilation begins. Do not try to fully automate past this point.
+- **Active development:** The maintainer is actively fixing bugs (including with ChatGPT). Before filing issues or attempting fixes, check whether the latest `main` branch already addresses the problem.
+
+### Issues observed during VM testing
+
+1. **`ensure_target_mounted` (line 570):** Creates `/mnt/gentoo/boot/efi` directory *before* mounting the root filesystem on `/mnt/gentoo`. After the mount, the directory is hidden by the fresh ext4 filesystem. This is one of the known timing/ordering issues described above. Workaround: manually `mount /dev/md0 /mnt/gentoo && mkdir -p /mnt/gentoo/boot/efi && mount /dev/sda1 /mnt/gentoo/boot/efi` then re-run the script (it resumes from state).
 2. **Profile selection in `chroot_bootstrap_portage`:** The awk filter selects any `amd64` + `systemd` profile but does not exclude `musl` profiles. On images where the musl/hardened/systemd profile ranks last, it may be selected, causing glibc-dependent packages to fail during `emerge`.
 
 ### Shellcheck notes
