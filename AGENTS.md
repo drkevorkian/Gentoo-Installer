@@ -12,14 +12,42 @@ This repository contains a single Bash script (`gentoo_installer.sh`) — an aut
 - **Syntax check:** `bash -n gentoo_installer.sh` — quick parse-time validation.
 - There is no test framework, build system, or package manager in this repo.
 
-### Running the script
+### Running the script in a QEMU VM
 
-**Do NOT run `gentoo_installer.sh` in a cloud agent VM.** The script destructively partitions and formats real block devices. It requires:
-- Root privileges on a live Gentoo (or compatible) environment
-- Two physical disks (`/dev/sda`, `/dev/sdb` by default)
-- Explicit safety flags: `ARMED=YES WIPE_DISKS=YES CONFIRM_ERASE=ERASE-sda-sdb`
+The script can be tested in a nested QEMU VM (TCG software emulation, no KVM required). Steps:
 
-For development, validate changes with `bash -n` and `shellcheck` only.
+1. **Install QEMU:** `sudo apt-get install -y qemu-system-x86 qemu-utils`
+2. **Create two virtual disks:** `qemu-img create -f qcow2 disk1.qcow2 20G && qemu-img create -f qcow2 disk2.qcow2 20G`
+3. **Download Gentoo minimal install ISO** from `https://distfiles.gentoo.org/releases/amd64/autobuilds/current-install-amd64-minimal/`
+4. **Extract kernel/initrd from ISO** (GRUB doesn't support serial console out of the box):
+   ```
+   7z e gentoo-minimal.iso boot/gentoo boot/gentoo.igz -oiso-extract
+   ```
+5. **Boot with serial console** (bypassing GRUB):
+   ```
+   qemu-system-x86_64 -m 4G -smp 4 -accel tcg,thread=multi -cpu max \
+     -hda disk1.qcow2 -hdb disk2.qcow2 -cdrom gentoo-minimal.iso \
+     -netdev user,id=net0 -device e1000,netdev=net0 \
+     -kernel iso-extract/gentoo -initrd iso-extract/gentoo.igz \
+     -append 'dokeymap nodhcp root=live:CDLABEL=Gentoo-amd64-20260322 rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot console=ttyS0,115200' \
+     -nographic -no-reboot
+   ```
+6. **Inside the VM**, configure networking (`dhcpcd <interface>`), transfer the script, then run:
+   ```
+   ARMED=YES WIPE_DISKS=YES CONFIRM_ERASE=ERASE-sda-sdb bash gentoo_installer.sh
+   ```
+7. Type `I_UNDERSTAND` when prompted.
+
+**Caveats discovered during testing:**
+- The network interface in the VM uses predictable names (e.g., `ens3`), not `eth0`.
+- Pre-downloading the stage3 tarball and serving it via a local HTTP server (`python3 -m http.server`) avoids slow downloads through QEMU NAT. The VM can reach the host at `10.0.2.2`.
+- TCG mode is ~50x slower than native. The disk/partition/RAID phases complete in minutes, but `emerge` (compilation) takes hours.
+- The CDLABEL in the `-append` parameter must match the ISO version (check with `7z l` or the GRUB config inside the ISO).
+
+### Known bugs found during VM testing
+
+1. **`ensure_target_mounted` (line 570):** Creates `/mnt/gentoo/boot/efi` directory *before* mounting the root filesystem on `/mnt/gentoo`. After the mount, the directory is hidden by the fresh ext4 filesystem. Workaround: manually `mount /dev/md0 /mnt/gentoo && mkdir -p /mnt/gentoo/boot/efi && mount /dev/sda1 /mnt/gentoo/boot/efi` then re-run the script (it resumes from state).
+2. **Profile selection in `chroot_bootstrap_portage`:** The awk filter selects any `amd64` + `systemd` profile but does not exclude `musl` profiles. On images where the musl/hardened/systemd profile ranks last, it may be selected, causing glibc-dependent packages to fail during `emerge`.
 
 ### Shellcheck notes
 
